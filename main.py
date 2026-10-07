@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import random
+import sqlite3
 from datetime import datetime
 
 try:
@@ -24,6 +25,64 @@ LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID")
 if not DISCORD_TOKEN:
     print("エラー: 環境変数 DISCORD_TOKEN が設定されていません。")
     sys.exit(1)
+
+# データベース設定
+DB_PATH = os.path.join(os.path.dirname(__file__), "auth_bot.db")
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS guild_settings (
+                guild_id INTEGER PRIMARY KEY,
+                log_channel_id INTEGER,
+                updated_at TEXT
+            )
+        """)
+        conn.commit()
+
+init_db()
+
+def get_guild_log_channel_id(guild_id: int) -> int | None:
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT log_channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,))
+            row = cur.fetchone()
+            if row and row[0]:
+                return row[0]
+    except Exception as e:
+        print(f"DB読み込みエラー: {e}")
+    return LOG_CHANNEL_ID
+
+def set_guild_log_channel_id(guild_id: int, channel_id: int | None):
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cur = conn.cursor()
+            now_str = datetime.now().isoformat()
+            cur.execute("""
+                INSERT INTO guild_settings (guild_id, log_channel_id, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id) DO UPDATE SET
+                    log_channel_id = excluded.log_channel_id,
+                    updated_at = excluded.updated_at
+            """, (guild_id, channel_id, now_str))
+            conn.commit()
+    except Exception as e:
+        print(f"DB保存エラー: {e}")
+
+async def get_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    ch_id = get_guild_log_channel_id(guild.id)
+    if not ch_id:
+        return None
+    channel = guild.get_channel(ch_id)
+    if not channel:
+        try:
+            channel = await guild.fetch_channel(ch_id)
+        except Exception:
+            return None
+    if isinstance(channel, discord.TextChannel):
+        return channel
+    return None
 
 # クールダウン管理 (連打・DoS防止)
 cooldowns = {}
@@ -61,53 +120,67 @@ def format_uptime(seconds: float) -> str:
 
 # 認証ログ送信ヘルパー
 async def send_auth_log(guild: discord.Guild, user: discord.User | discord.Member, role: discord.Role | None, removed_role: discord.Role | None = None):
-    if not LOG_CHANNEL_ID:
+    channel = await get_log_channel(guild)
+    if not channel:
         return
     try:
-        channel = guild.get_channel(LOG_CHANNEL_ID)
-        if not channel:
-            channel = await guild.fetch_channel(LOG_CHANNEL_ID)
-        if channel and isinstance(channel, discord.TextChannel):
-            embed = discord.Embed(
-                title="📋 認証ログ",
-                description="ユーザーが認証を完了しました。",
-                color=discord.Color.green(),
-                timestamp=datetime.now()
-            )
-            embed.add_field(name="ユーザー", value=f"{user} ({user.mention})", inline=True)
-            embed.add_field(name="ユーザーID", value=str(user.id), inline=True)
-            embed.add_field(name="付与ロール", value=role.mention if role else "不明", inline=True)
-            if removed_role:
-                embed.add_field(name="剥奪ロール", value=removed_role.mention, inline=True)
-            if user.avatar:
-                embed.set_thumbnail(url=user.avatar.url)
-            await channel.send(embed=embed)
+        embed = discord.Embed(
+            title="認証ログ",
+            description="ユーザーが認証を完了しました。",
+            color=discord.Color.green(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="ユーザー", value=f"{user} ({user.mention})", inline=True)
+        embed.add_field(name="ユーザーID", value=str(user.id), inline=True)
+        embed.add_field(name="付与ロール", value=role.mention if role else "未設定", inline=True)
+        if removed_role:
+            embed.add_field(name="剥奪ロール", value=removed_role.mention, inline=True)
+        if user.avatar:
+            embed.set_thumbnail(url=user.avatar.url)
+        await channel.send(embed=embed)
     except Exception as e:
         print(f"ログ送信エラー: {e}")
 
 # ブラックリストブロック時のログ送信ヘルパー
 async def send_blacklist_log(guild: discord.Guild, user: discord.User | discord.Member, blacklist_role: discord.Role):
-    if not LOG_CHANNEL_ID:
+    channel = await get_log_channel(guild)
+    if not channel:
         return
     try:
-        channel = guild.get_channel(LOG_CHANNEL_ID)
-        if not channel:
-            channel = await guild.fetch_channel(LOG_CHANNEL_ID)
-        if channel and isinstance(channel, discord.TextChannel):
-            embed = discord.Embed(
-                title="⚠️ 認証ブロックログ",
-                description="ブラックリストロールを持つユーザーの認証を拒否しました。",
-                color=discord.Color.red(),
-                timestamp=datetime.now()
-            )
-            embed.add_field(name="ユーザー", value=f"{user} ({user.mention})", inline=True)
-            embed.add_field(name="ユーザーID", value=str(user.id), inline=True)
-            embed.add_field(name="所持制限ロール", value=blacklist_role.mention, inline=True)
-            if user.avatar:
-                embed.set_thumbnail(url=user.avatar.url)
-            await channel.send(embed=embed)
+        embed = discord.Embed(
+            title="認証ブロックログ",
+            description="ブラックリストロールを持つユーザーの認証を拒否しました。",
+            color=discord.Color.red(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="ユーザー", value=f"{user} ({user.mention})", inline=True)
+        embed.add_field(name="ユーザーID", value=str(user.id), inline=True)
+        embed.add_field(name="所持制限ロール", value=blacklist_role.mention, inline=True)
+        if user.avatar:
+            embed.set_thumbnail(url=user.avatar.url)
+        await channel.send(embed=embed)
     except Exception as e:
         print(f"ブラックリストログ送信エラー: {e}")
+
+# 認証失敗時のログ送信ヘルパー
+async def send_auth_fail_log(guild: discord.Guild, user: discord.User | discord.Member, reason: str):
+    channel = await get_log_channel(guild)
+    if not channel:
+        return
+    try:
+        embed = discord.Embed(
+            title="認証失敗ログ",
+            description=f"認証処理に失敗しました: {reason}",
+            color=discord.Color.gold(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="ユーザー", value=f"{user} ({user.mention})", inline=True)
+        embed.add_field(name="ユーザーID", value=str(user.id), inline=True)
+        if user.avatar:
+            embed.set_thumbnail(url=user.avatar.url)
+        await channel.send(embed=embed)
+    except Exception as e:
+        print(f"失敗ログ送信エラー: {e}")
 
 # ウェルカムDM送信ヘルパー
 async def send_welcome_dm(member: discord.Member):
@@ -227,7 +300,34 @@ class CaptchaModal(discord.ui.Modal, title="サーバー認証 (CAPTCHA)"):
 
     async def on_submit(self, interaction: discord.Interaction):
         if self.captcha_input.value.strip().upper() != self.expected_captcha.upper():
+            if interaction.guild:
+                await send_auth_fail_log(interaction.guild, interaction.user, f"CAPTCHA不一致 (入力: {self.captcha_input.value.strip()})")
             return await interaction.response.send_message("❌ 認証コードが一致しません。もう一度やり直してください。", ephemeral=True)
+        await handle_role_assignment(interaction, self.target_role_id, self.remove_role_id, self.blacklist_role_id)
+
+class MathModal(discord.ui.Modal, title="サーバー認証 (計算問題)"):
+    def __init__(self, target_role_id: int | None, remove_role_id: int | None, blacklist_role_id: int | None, answer: int, expr_str: str):
+        super().__init__()
+        self.target_role_id = target_role_id
+        self.remove_role_id = remove_role_id
+        self.blacklist_role_id = blacklist_role_id
+        self.answer = answer
+
+        self.answer_input = discord.ui.TextInput(
+            label=f"{expr_str} の答えを入力してください",
+            placeholder="半角数字で入力",
+            min_length=1,
+            max_length=5,
+            required=True
+        )
+        self.add_item(self.answer_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        val = self.answer_input.value.strip()
+        if not val.isdigit() or int(val) != self.answer:
+            if interaction.guild:
+                await send_auth_fail_log(interaction.guild, interaction.user, f"計算間違い (入力: {val})")
+            return await interaction.response.send_message("❌ 計算の答えが一致しません。もう一度お試しください。", ephemeral=True)
         await handle_role_assignment(interaction, self.target_role_id, self.remove_role_id, self.blacklist_role_id)
 
 class PassphraseModal(discord.ui.Modal, title="サーバー認証 (合言葉)"):
@@ -247,6 +347,8 @@ class PassphraseModal(discord.ui.Modal, title="サーバー認証 (合言葉)"):
 
     async def on_submit(self, interaction: discord.Interaction):
         if self.pass_input.value.strip() != self.expected_passphrase.strip():
+            if interaction.guild:
+                await send_auth_fail_log(interaction.guild, interaction.user, "合言葉不一致")
             return await interaction.response.send_message("❌ 合言葉が間違っています。もう一度お試しください。", ephemeral=True)
         await handle_role_assignment(interaction, self.target_role_id, self.remove_role_id, self.blacklist_role_id)
 
@@ -267,6 +369,8 @@ class TermsModal(discord.ui.Modal, title="サーバー認証 (利用規約同意
     async def on_submit(self, interaction: discord.Interaction):
         val = self.terms_input.value.strip()
         if val not in ("同意する", "同意") and val.lower() != "agree":
+            if interaction.guild:
+                await send_auth_fail_log(interaction.guild, interaction.user, f"規約同意文字列不一致 (入力: {val})")
             return await interaction.response.send_message("❌ 「同意する」と正確に入力してください。", ephemeral=True)
         await handle_role_assignment(interaction, self.target_role_id, self.remove_role_id, self.blacklist_role_id)
 
@@ -354,6 +458,12 @@ async def on_button_click(interaction: discord.Interaction):
             captcha = generate_captcha(4)
             return await interaction.response.send_modal(CaptchaModal(role_id, remove_role_id, blacklist_role_id, captcha))
 
+        if auth_type == "math":
+            n1 = random.randint(1, 19)
+            n2 = random.randint(1, 19)
+            ans = n1 + n2
+            return await interaction.response.send_modal(MathModal(role_id, remove_role_id, blacklist_role_id, ans, f"{n1} + {n2}"))
+
         if auth_type == "pass":
             passphrase = ":".join(parts[5:]) if len(parts) > 5 else ""
             return await interaction.response.send_modal(PassphraseModal(role_id, remove_role_id, blacklist_role_id, passphrase))
@@ -365,6 +475,299 @@ async def on_button_click(interaction: discord.Interaction):
         return await handle_role_assignment(interaction, role_id, remove_role_id, blacklist_role_id)
 
 # === スラッシュコマンド ===
+
+# === セットアップUIコンポーネント ===
+
+class SetupDetailModal(discord.ui.Modal, title="認証パネル 詳細設定"):
+    def __init__(self, setup_view: "SetupView"):
+        super().__init__()
+        self.setup_view = setup_view
+
+        self.title_input = discord.ui.TextInput(
+            label="パネルのタイトル",
+            default=setup_view.panel_title,
+            max_length=100,
+            required=True
+        )
+        self.desc_input = discord.ui.TextInput(
+            label="パネルの説明文",
+            style=discord.TextStyle.paragraph,
+            default=setup_view.panel_desc,
+            max_length=1000,
+            required=True
+        )
+        self.btn_label_input = discord.ui.TextInput(
+            label="ボタンのテキスト",
+            default=setup_view.button_label,
+            max_length=50,
+            required=True
+        )
+        self.extra_input = discord.ui.TextInput(
+            label="合言葉 / 規約文（方式に合わせて使用）",
+            default=setup_view.extra_text,
+            max_length=500,
+            required=False
+        )
+
+        self.add_item(self.title_input)
+        self.add_item(self.desc_input)
+        self.add_item(self.btn_label_input)
+        self.add_item(self.extra_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.setup_view.panel_title = self.title_input.value.strip() or self.setup_view.panel_title
+        self.setup_view.panel_desc = self.desc_input.value.strip() or self.setup_view.panel_desc
+        self.setup_view.button_label = self.btn_label_input.value.strip() or self.setup_view.button_label
+        if self.extra_input.value.strip():
+            self.setup_view.extra_text = self.extra_input.value.strip()
+
+        embed = self.setup_view.build_embed()
+        await interaction.response.edit_message(embed=embed, view=self.setup_view)
+
+class SetupView(discord.ui.View):
+    def __init__(self, author_id: int, current_log_channel: discord.TextChannel | None = None):
+        super().__init__(timeout=300)
+        self.author_id = author_id
+        self.target_role: discord.Role | None = None
+        self.remove_role: discord.Role | None = None
+        self.blacklist_role: discord.Role | None = None
+        self.log_channel: discord.TextChannel | None = current_log_channel
+        self.auth_type: str = "direct"
+        self.panel_title: str = "サーバー認証"
+        self.panel_desc: str = "下のボタンを押して認証を完了してください。"
+        self.button_label: str = "認証する"
+        self.extra_text: str = ""
+
+        self.build_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("この設定メニューは操作できません。", ephemeral=True)
+            return False
+        return True
+
+    def build_components(self):
+        self.clear_items()
+
+        # 1. 付与ロール選択
+        role_select = discord.ui.RoleSelect(
+            placeholder="付与するロールを選択",
+            min_values=0,
+            max_values=1,
+            row=0
+        )
+        role_select.callback = self.on_role_select
+        self.add_item(role_select)
+
+        # 2. ログチャンネル選択
+        chan_select = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text],
+            placeholder="ログ送信先チャンネルを選択",
+            min_values=0,
+            max_values=1,
+            row=1
+        )
+        chan_select.callback = self.on_channel_select
+        self.add_item(chan_select)
+
+        # 3. 認証方式選択
+        type_options = [
+            discord.SelectOption(label="ワンクリック認証", value="direct", description="ボタンを押すだけで即時完了", default=(self.auth_type == "direct")),
+            discord.SelectOption(label="計算問題認証", value="math", description="ランダムな足し算の答えを入力", default=(self.auth_type == "math")),
+            discord.SelectOption(label="CAPTCHA認証", value="captcha", description="4桁の英数字コードを入力", default=(self.auth_type == "captcha")),
+            discord.SelectOption(label="合言葉認証", value="passphrase", description="指定の合言葉を入力", default=(self.auth_type == "passphrase")),
+            discord.SelectOption(label="利用規約同意", value="terms", description="「同意する」と入力", default=(self.auth_type == "terms")),
+        ]
+        type_select = discord.ui.Select(
+            placeholder="認証方式を選択",
+            options=type_options,
+            row=2
+        )
+        type_select.callback = self.on_type_select
+        self.add_item(type_select)
+
+        # 4. 操作ボタン
+        detail_btn = discord.ui.Button(label="詳細設定", style=discord.ButtonStyle.secondary, row=3)
+        detail_btn.callback = self.on_detail_btn
+        self.add_item(detail_btn)
+
+        submit_btn = discord.ui.Button(label="パネルを設置", style=discord.ButtonStyle.primary, row=3)
+        submit_btn.callback = self.on_submit_btn
+        self.add_item(submit_btn)
+
+        cancel_btn = discord.ui.Button(label="閉じる", style=discord.ButtonStyle.danger, row=3)
+        cancel_btn.callback = self.on_cancel_btn
+        self.add_item(cancel_btn)
+
+    def build_embed(self) -> discord.Embed:
+        type_names = {
+            "direct": "ワンクリック認証",
+            "math": "計算問題認証",
+            "captcha": "CAPTCHA認証",
+            "passphrase": "合言葉認証",
+            "terms": "利用規約同意"
+        }
+        embed = discord.Embed(
+            title="認証パネル設定",
+            description="各項目を選択して設定を調整し、「パネルを設置」を押してください。",
+            color=discord.Color.dark_gray()
+        )
+        role_val = self.target_role.mention if self.target_role else "未選択（.env設定を使用）"
+        log_val = self.log_channel.mention if self.log_channel else "未選択（.env設定を使用）"
+        remove_val = self.remove_role.mention if self.remove_role else "なし"
+        black_val = self.blacklist_role.mention if self.blacklist_role else "なし"
+
+        embed.add_field(name="付与ロール", value=role_val, inline=True)
+        embed.add_field(name="ログ送信先", value=log_val, inline=True)
+        embed.add_field(name="認証方式", value=type_names.get(self.auth_type, self.auth_type), inline=True)
+        embed.add_field(name="剥奪ロール", value=remove_val, inline=True)
+        embed.add_field(name="制限ロール", value=black_val, inline=True)
+        embed.add_field(name="ボタン文字", value=self.button_label, inline=True)
+        embed.add_field(name="見出し", value=self.panel_title, inline=False)
+        preview_desc = (self.panel_desc[:120] + "...") if len(self.panel_desc) > 120 else self.panel_desc
+        embed.add_field(name="説明文", value=preview_desc, inline=False)
+        if self.extra_text:
+            embed.add_field(name="合言葉 / 規約文", value=self.extra_text, inline=False)
+
+        return embed
+
+    async def on_role_select(self, interaction: discord.Interaction):
+        values = interaction.data.get("values", [])
+        if values:
+            role_id = int(values[0])
+            self.target_role = interaction.guild.get_role(role_id) if interaction.guild else None
+        else:
+            self.target_role = None
+        self.build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def on_channel_select(self, interaction: discord.Interaction):
+        values = interaction.data.get("values", [])
+        if values:
+            channel_id = int(values[0])
+            self.log_channel = interaction.guild.get_channel(channel_id) if interaction.guild else None
+        else:
+            self.log_channel = None
+        self.build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def on_type_select(self, interaction: discord.Interaction):
+        values = interaction.data.get("values", [])
+        if values:
+            self.auth_type = values[0]
+            if self.auth_type == "passphrase" and not self.extra_text:
+                self.extra_text = "pass1234"
+            elif self.auth_type == "terms" and not self.extra_text:
+                self.extra_text = "本サーバーの利用規約に同意します。"
+        self.build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def on_detail_btn(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(SetupDetailModal(self))
+
+    async def on_cancel_btn(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="設定メニューを終了しました。", embed=None, view=None)
+
+    async def on_submit_btn(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        channel = interaction.channel
+        if not guild or not channel:
+            return await interaction.response.send_message("サーバー内のチャンネルで実行してください。", ephemeral=True)
+
+        if not self.target_role and not ROLE_ID:
+            return await interaction.response.send_message("付与するロールを選択してください。", ephemeral=True)
+
+        if self.auth_type == "passphrase" and not self.extra_text:
+            return await interaction.response.send_message("合言葉認証にはキーワードの設定が必要です。「詳細設定」から入力してください。", ephemeral=True)
+
+        # ログチャンネル設定があればDBに永続化
+        if self.log_channel:
+            set_guild_log_channel_id(guild.id, self.log_channel.id)
+
+        role_id_str = str(self.target_role.id) if self.target_role else "default"
+        remove_role_id_str = str(self.remove_role.id) if self.remove_role else "none"
+        blacklist_role_id_str = str(self.blacklist_role.id) if self.blacklist_role else "none"
+
+        prefix = f"auth_btn:{role_id_str}:{remove_role_id_str}:{blacklist_role_id_str}"
+        if self.auth_type == "passphrase":
+            custom_id = f"{prefix}:pass:{self.extra_text}"
+        elif self.auth_type == "terms":
+            custom_id = f"{prefix}:terms"
+        else:
+            custom_id = f"{prefix}:{self.auth_type}"
+
+        # 設置用パネル作成
+        panel_embed = discord.Embed(
+            title=self.panel_title,
+            description=self.panel_desc,
+            color=discord.Color.green()
+        )
+        if self.auth_type == "terms" and self.extra_text:
+            panel_embed.add_field(name="利用規約", value=self.extra_text, inline=False)
+
+        panel_view = discord.ui.View(timeout=None)
+        button = discord.ui.Button(
+            label=self.button_label,
+            style=discord.ButtonStyle.success,
+            custom_id=custom_id
+        )
+        panel_view.add_item(button)
+
+        await channel.send(embed=panel_embed, view=panel_view)
+
+        done_embed = discord.Embed(
+            title="設置完了",
+            description=f"認証パネルを {channel.mention} に設置しました。",
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=done_embed, view=None)
+
+# === スラッシュコマンド ===
+
+@bot.tree.command(name="setup", description="認証パネルの簡単作成・設定メニューを開きます（管理者限定）")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    remove_role="認証時に剥奪するロール（未認証ロール等・任意）",
+    blacklist_role="認証を禁止するブラックリストロール（任意）"
+)
+async def setup_command(
+    interaction: discord.Interaction,
+    remove_role: discord.Role | None = None,
+    blacklist_role: discord.Role | None = None
+):
+    if not interaction.guild:
+        return await interaction.response.send_message("このコマンドはサーバー内でのみ使用できます。", ephemeral=True)
+
+    current_log_id = get_guild_log_channel_id(interaction.guild.id)
+    current_log_ch = interaction.guild.get_channel(current_log_id) if current_log_id else None
+    if not current_log_ch and current_log_id:
+        try:
+            current_log_ch = await interaction.guild.fetch_channel(current_log_id)
+        except Exception:
+            current_log_ch = None
+
+    view = SetupView(interaction.user.id, current_log_channel=current_log_ch)
+    if remove_role:
+        view.remove_role = remove_role
+    if blacklist_role:
+        view.blacklist_role = blacklist_role
+
+    embed = view.build_embed()
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+@bot.tree.command(name="set-log-channel", description="サーバーの認証ログ送信先チャンネルを設定します（管理者限定）")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel="ログを送信するテキストチャンネル（指定なしでリセット）")
+async def set_log_channel_cmd(interaction: discord.Interaction, channel: discord.TextChannel | None = None):
+    if not interaction.guild:
+        return await interaction.response.send_message("このコマンドはサーバー内でのみ使用できます。", ephemeral=True)
+
+    if channel:
+        set_guild_log_channel_id(interaction.guild.id, channel.id)
+        await interaction.response.send_message(f"ログ送信先チャンネルを {channel.mention} に設定しました。", ephemeral=True)
+    else:
+        set_guild_log_channel_id(interaction.guild.id, None)
+        await interaction.response.send_message("サーバー個別のログ設定を解除しました（デフォルト設定を使用します）。", ephemeral=True)
 
 @bot.tree.command(name="set-panel", description="認証パネルをこのチャンネルに設置します（管理者限定）")
 @app_commands.default_permissions(administrator=True)
@@ -381,6 +784,7 @@ async def on_button_click(interaction: discord.Interaction):
 )
 @app_commands.choices(auth_type=[
     app_commands.Choice(name="ワンクリック認証", value="direct"),
+    app_commands.Choice(name="計算問題認証", value="math"),
     app_commands.Choice(name="CAPTCHA認証（ランダム文字列）", value="captcha"),
     app_commands.Choice(name="合言葉認証（キーワード入力）", value="passphrase"),
     app_commands.Choice(name="規約同意認証（同意入力）", value="terms"),
@@ -390,8 +794,8 @@ async def set_panel(
     role: discord.Role | None = None,
     remove_role: discord.Role | None = None,
     blacklist_role: discord.Role | None = None,
-    title: str = "✅ サーバー認証",
-    description: str = "下のボタンを押して認証を完了し、すべてのチャンネルを解放してください。",
+    title: str = "サーバー認証",
+    description: str = "下のボタンを押して認証を完了してください。",
     button_label: str = "認証する",
     auth_type: app_commands.Choice[str] | None = None,
     passphrase: str | None = None,
@@ -420,28 +824,27 @@ async def set_panel(
     )
 
     if selected_auth == "terms":
-        embed.add_field(name="📜 利用規約", value=terms_text, inline=False)
+        embed.add_field(name="利用規約", value=terms_text, inline=False)
 
     view = discord.ui.View(timeout=None)
     button = discord.ui.Button(
         label=button_label,
         style=discord.ButtonStyle.success,
-        emoji="🔓",
         custom_id=custom_id
     )
     view.add_item(button)
 
-    await interaction.response.send_message("認証パネルを設置しました！", ephemeral=True)
+    await interaction.response.send_message("認証パネルを設置しました。", ephemeral=True)
     if interaction.channel:
         await interaction.channel.send(embed=embed, view=view)
 
 @bot.tree.command(name="ping", description="Botの応答速度（Ping）を測定します")
 async def ping(interaction: discord.Interaction):
     ws_ping = max(0, round(bot.latency * 1000))
-    status_text = "🟢 良好" if ws_ping < 150 else ("🟡 普通" if ws_ping < 300 else "🔴 遅延")
+    status_text = "良好" if ws_ping < 150 else ("普通" if ws_ping < 300 else "遅延")
     color = discord.Color.green() if ws_ping < 150 else (discord.Color.gold() if ws_ping < 300 else discord.Color.red())
 
-    embed = discord.Embed(title="🏓 Pong!", color=color, timestamp=datetime.now())
+    embed = discord.Embed(title="Pong", color=color, timestamp=datetime.now())
     embed.add_field(name="WebSocket Ping", value=f"{ws_ping} ms", inline=True)
     embed.add_field(name="ステータス", value=status_text, inline=True)
     embed.set_footer(text="Powered by rds9")
@@ -469,19 +872,19 @@ async def stats(interaction: discord.Interaction):
     ws_ping = max(0, round(bot.latency * 1000))
 
     embed = discord.Embed(
-        title=f"📊 {guild.name} 認証統計",
+        title=f"{guild.name} 認証統計",
         color=discord.Color.blue(),
         timestamp=datetime.now()
     )
     if guild.icon:
         embed.set_thumbnail(url=guild.icon.url)
 
-    embed.add_field(name="👥 総メンバー数", value=f"{total_members} 人", inline=True)
-    embed.add_field(name="✅ 認証済みメンバー", value=f"{verified_count} 人 ({verified_rate})", inline=True)
-    embed.add_field(name="⏳ 未認証メンバー", value=f"{unverified_count} 人", inline=True)
-    embed.add_field(name="⏱️ Bot稼働時間", value=uptime_str, inline=True)
-    embed.add_field(name="📶 WebSocket Ping", value=f"{ws_ping} ms", inline=True)
-    embed.add_field(name="🌐 参加サーバー総数", value=f"{len(bot.guilds)} 鯖", inline=True)
+    embed.add_field(name="総メンバー数", value=f"{total_members} 人", inline=True)
+    embed.add_field(name="認証済みメンバー", value=f"{verified_count} 人 ({verified_rate})", inline=True)
+    embed.add_field(name="未認証メンバー", value=f"{unverified_count} 人", inline=True)
+    embed.add_field(name="Bot稼働時間", value=uptime_str, inline=True)
+    embed.add_field(name="WebSocket Ping", value=f"{ws_ping} ms", inline=True)
+    embed.add_field(name="参加サーバー総数", value=f"{len(bot.guilds)} 鯖", inline=True)
     embed.set_footer(text="Powered by rds9")
 
     await interaction.followup.send(embed=embed)
@@ -489,28 +892,38 @@ async def stats(interaction: discord.Interaction):
 @bot.tree.command(name="help", description="認証Botのヘルプと使い方を表示します")
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="📖 認証Bot ヘルプ & コマンド一覧",
-        description="サーバーを安全に保護するための多機能認証Botです。",
+        title="認証Bot ヘルプ & コマンド一覧",
+        description="サーバーを保護するための認証Botです。",
         color=discord.Color.blue(),
         timestamp=datetime.now()
     )
     embed.add_field(
-        name="🛠️ 管理者コマンド",
-        value="`/set-panel`\n認証パネルを設置します。付与ロール・剥奪ロール・ブラックリストロール（要注意ロール等）・認証方式（ワンクリック/CAPTCHA/合言葉/規約同意）を細かく設定できます。",
+        name="管理者コマンド",
+        value=(
+            "`/setup`\nインタラクティブな設定メニュー（ロール選択・ログ先・方式選択）から簡単に認証パネルを作成・設置します。\n\n"
+            "`/set-log-channel [channel]`\n認証ログの送信先チャンネルを個別に設定・解除します。\n\n"
+            "`/set-panel`\nコマンド引数から直接認証パネルを設置します。"
+        ),
         inline=False
     )
     embed.add_field(
-        name="📊 情報コマンド",
-        value="`/stats` - サーバーの認証人数や稼働状況を表示\n`/ping` - Botの応答速度（Ping）を測定\n`/help` - このヘルプを表示",
+        name="情報コマンド",
+        value="`/stats` - サーバーの認証人数や稼働状況を表示\n`/ping` - 応答速度（Ping）を測定\n`/help` - このヘルプを表示",
         inline=False
     )
     embed.add_field(
-        name="🔐 認証方式の一覧",
-        value="• **ワンクリック認証**: ボタンを押すだけで即時認証\n• **CAPTCHA認証**: ランダムな4文字の確認コード入力\n• **合言葉認証**: 設定されたキーワードを入力\n• **規約同意認証**: 規約を確認し「同意する」と入力",
+        name="認証方式の一覧",
+        value=(
+            "• **ワンクリック認証**: ボタンを押すだけで即時認証\n"
+            "• **計算問題認証**: 簡単な足し算の答えを入力（Bot対策）\n"
+            "• **CAPTCHA認証**: ランダムな4文字の確認コード入力\n"
+            "• **合言葉認証**: 設定されたキーワードを入力\n"
+            "• **規約同意認証**: 規約を確認し「同意する」と入力"
+        ),
         inline=False
     )
     embed.add_field(
-        name="🚫 ブラックリスト機能",
+        name="ブラックリスト機能",
         value="要注意ロールや制限ロールを持つユーザーの認証を自動でブロックし、ログに記録します。",
         inline=False
     )
