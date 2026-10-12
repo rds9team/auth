@@ -11,8 +11,9 @@ https://discord.com/oauth2/authorize?client_id=1516079643709411378
 
 1. **認証パネル設置 (`/set-panel`)**
    - コマンド引数から付与ロール・剥奪ロール・制限ロール・認証方式を直接指定して認証パネルを設置
+   - Embedのカラーコード（HEX/プリセット）、画像URL、サムネイルURLなどのカスタマイズに対応
 2. **サーバー別ログチャンネル管理 (`/set-log-channel`)**
-   - `.env` 固定だけでなく、サーバーごとにログ送信先をコマンドから自由に設定可能（未設定時は `.env` にフォールバック）
+   - サーバーごとにログ送信先をコマンドから自由に設定可能（未設定時はログ送信なし、または `.env` フォールバック）
 3. **多彩な認証方式**
    - **ワンクリック認証**: ボタンを押すだけで即座にロールを付与
    - **計算問題認証**: スパムBot対策としてランダムな足し算の答えを入力
@@ -27,7 +28,7 @@ https://discord.com/oauth2/authorize?client_id=1516079643709411378
 6. **クールダウン・連打防止 (Rate Limit)**
    - 連続でのボタン連打やDoS行為を自動で抑制（3秒の待機時間）
 7. **認証統計・情報コマンド**
-   - `/stats`: サーバー内の認証人数・未認証人数・認証率やBotの稼働時間・Pingを表示
+   - `/stats`: サーバー内の認証人数・未認証人数・認証率やBotの稼働時間・Pingを表示（特定ロールの指定集計も可能）
    - `/ping`: WebSocket Ping を測定
    - `/help`: コマンドと機能の詳しいヘルプを表示
 8. **ウェルカムDM案内**
@@ -50,7 +51,7 @@ pip install -r requirements.txt
 ```env
 DISCORD_TOKEN=your_bot_token_here
 CLIENT_ID=your_client_id_here
-ROLE_ID=your_default_role_id_here
+ROLE_ID=your_default_role_id_here               # 任意（未指定時は /set-panel でロール指定）
 UNVERIFIED_ROLE_ID=your_unverified_role_id_here # 任意（認証時に剥奪するロール）
 BLACKLIST_ROLE_ID=your_blacklist_role_id_here   # 任意（認証を禁止するブラックリストロール）
 LOG_CHANNEL_ID=your_log_channel_id_here         # 任意（認証ログ通知チャンネル）
@@ -66,8 +67,9 @@ python main.py
 
 | コマンド | 権限 | 説明 |
 |---|---|---|
-| `/set-panel` | 管理者限定 | 認証パネルを設置（付与・剥奪・ブラックリストロール、認証方式、規約などを指定可能） |
-| `/stats` | 全員 | サーバーの認証統計やBot稼働状況を表示 |
+| `/set-panel` | 管理者限定 | 認証パネルを設置（付与・剥奪・ブラックリストロール、認証方式、色・画像URLなどを指定可能） |
+| `/set-log-channel` | 管理者限定 | サーバー個別の認証ログ通知チャンネルを設定・解除 |
+| `/stats` | 全員 | サーバーの認証統計やBot稼働状況を表示（ロール別集計対応） |
 | `/ping` | 全員 | Botの応答速度（Ping）を測定 |
 | `/help` | 全員 | コマンドと使い方のヘルプを表示 |
 

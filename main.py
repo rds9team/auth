@@ -501,7 +501,10 @@ async def set_log_channel_cmd(interaction: discord.Interaction, channel: discord
     button_label="ボタンのテキスト（デフォルト: 認証する）",
     auth_type="認証の方式（デフォルト: ワンクリック）",
     passphrase="合言葉認証を選択した場合の正解キーワード",
-    terms_text="規約同意認証で表示する規約メッセージ"
+    terms_text="規約同意認証で表示する規約メッセージ",
+    color="Embedのカラーコード（HEX: 例 #5865F2, green, blue など）",
+    image_url="Embedに表示する画像URL（任意）",
+    thumbnail_url="Embedに表示するサムネイル画像URL（任意）"
 )
 @app_commands.choices(auth_type=[
     app_commands.Choice(name="ワンクリック認証", value="direct"),
@@ -520,8 +523,14 @@ async def set_panel(
     button_label: str = "認証する",
     auth_type: app_commands.Choice[str] | None = None,
     passphrase: str | None = None,
-    terms_text: str = "本サーバーのルールを守り、他のメンバーへ迷惑となる行為を行わないことに同意します。"
+    terms_text: str = "本サーバーのルールを守り、他のメンバーへ迷惑となる行為を行わないことに同意します。",
+    color: str | None = None,
+    image_url: str | None = None,
+    thumbnail_url: str | None = None
 ):
+    if not role and not ROLE_ID:
+        return await interaction.response.send_message("エラー: 付与するロール（role）を指定してください。", ephemeral=True)
+
     selected_auth = auth_type.value if auth_type else "direct"
     if selected_auth == "passphrase" and not passphrase:
         return await interaction.response.send_message("エラー: 合言葉認証を選択した場合は「passphrase」オプションで合言葉を指定してください。", ephemeral=True)
@@ -538,11 +547,38 @@ async def set_panel(
     else:
         custom_id = f"{prefix}:{selected_auth}"
 
+    embed_color = discord.Color.green()
+    if color:
+        c_str = color.strip()
+        color_map = {
+            "green": discord.Color.green(),
+            "blue": discord.Color.blue(),
+            "red": discord.Color.red(),
+            "gold": discord.Color.gold(),
+            "purple": discord.Color.purple(),
+            "blurple": discord.Color.blurple(),
+            "dark": discord.Color.dark_theme(),
+        }
+        if c_str.lower() in color_map:
+            embed_color = color_map[c_str.lower()]
+        else:
+            try:
+                hex_val = int(c_str.lstrip("#"), 16)
+                embed_color = discord.Color(hex_val)
+            except ValueError:
+                embed_color = discord.Color.green()
+
     embed = discord.Embed(
         title=title,
         description=description,
-        color=discord.Color.green()
+        color=embed_color
     )
+
+    if thumbnail_url and (thumbnail_url.startswith("http://") or thumbnail_url.startswith("https://")):
+        embed.set_thumbnail(url=thumbnail_url)
+
+    if image_url and (image_url.startswith("http://") or image_url.startswith("https://")):
+        embed.set_image(url=image_url)
 
     if selected_auth == "terms":
         embed.add_field(name="利用規約", value=terms_text, inline=False)
@@ -573,7 +609,8 @@ async def ping(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="stats", description="サーバーの認証統計やBotの稼働状態を表示します")
-async def stats(interaction: discord.Interaction):
+@app_commands.describe(role="認証人数を集計する対象ロール（未指定時はデフォルトロール）")
+async def stats(interaction: discord.Interaction, role: discord.Role | None = None):
     guild = interaction.guild
     if not guild:
         return await interaction.response.send_message("このコマンドはサーバー内でのみ使用できます。", ephemeral=True)
@@ -581,14 +618,10 @@ async def stats(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
     total_members = guild.member_count or len(guild.members)
-    verified_count = 0
-    if ROLE_ID:
+    target_role = role
+    if not target_role and ROLE_ID:
         target_role = guild.get_role(ROLE_ID)
-        if target_role:
-            verified_count = sum(1 for m in guild.members if target_role in m.roles and not m.bot)
 
-    unverified_count = max(0, total_members - verified_count)
-    verified_rate = f"{(verified_count / total_members * 100):.1f}%" if total_members > 0 else "0%"
     uptime_str = format_uptime(time.time() - start_time)
     ws_ping = max(0, round(bot.latency * 1000))
 
@@ -601,8 +634,13 @@ async def stats(interaction: discord.Interaction):
         embed.set_thumbnail(url=guild.icon.url)
 
     embed.add_field(name="総メンバー数", value=f"{total_members} 人", inline=True)
-    embed.add_field(name="認証済みメンバー", value=f"{verified_count} 人 ({verified_rate})", inline=True)
-    embed.add_field(name="未認証メンバー", value=f"{unverified_count} 人", inline=True)
+    if target_role:
+        verified_count = sum(1 for m in guild.members if target_role in m.roles and not m.bot)
+        unverified_count = max(0, total_members - verified_count)
+        verified_rate = f"{(verified_count / total_members * 100):.1f}%" if total_members > 0 else "0%"
+        embed.add_field(name=f"認証済みメンバー ({target_role.name})", value=f"{verified_count} 人 ({verified_rate})", inline=True)
+        embed.add_field(name="未認証メンバー", value=f"{unverified_count} 人", inline=True)
+
     embed.add_field(name="Bot稼働時間", value=uptime_str, inline=True)
     embed.add_field(name="WebSocket Ping", value=f"{ws_ping} ms", inline=True)
     embed.add_field(name="参加サーバー総数", value=f"{len(bot.guilds)} 鯖", inline=True)
