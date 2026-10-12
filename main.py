@@ -14,9 +14,13 @@ except ImportError:
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+import aiohttp
+from aiohttp import web
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CLIENT_ID = os.getenv("CLIENT_ID")
+API_PORT = int(os.getenv("API_PORT", 8087))
+START_TIME = time.time()
 
 if not DISCORD_TOKEN:
     print("エラー: 環境変数 DISCORD_TOKEN が設定されていません。")
@@ -381,6 +385,51 @@ class AuthBot(commands.Bot):
             print(f"コマンド同期成功: {len(synced)} 件")
         except Exception as e:
             print(f"コマンド同期エラー: {e}")
+
+        # Web APIサーバーの初期化
+        app = web.Application()
+
+        async def root_handler(request):
+            return web.json_response({
+                "service": "auth-bot-api",
+                "status": "online",
+                "bot_name": self.user.name if self.user else "認証Bot",
+                "uptime_seconds": int(time.time() - START_TIME),
+            }, headers={"Access-Control-Allow-Origin": "*"})
+
+        async def health_handler(request):
+            return web.json_response({
+                "status": "ok",
+                "latency_ms": round(self.latency * 1000, 1) if self.latency else 0,
+                "guilds": len(self.guilds),
+                "users": sum(g.member_count or 0 for g in self.guilds),
+                "uptime_seconds": int(time.time() - START_TIME),
+            }, headers={"Access-Control-Allow-Origin": "*"})
+
+        async def stats_handler(request):
+            guild_count = len(self.guilds)
+            user_count = sum(g.member_count or 0 for g in self.guilds)
+            return web.json_response({
+                "status": "online",
+                "version": "v2.0",
+                "bot_name": "認証bot",
+                "guilds": guild_count,
+                "users": user_count,
+                "latency_ms": round(self.latency * 1000, 1) if self.latency else 0,
+                "uptime_seconds": int(time.time() - START_TIME),
+            }, headers={"Access-Control-Allow-Origin": "*"})
+
+        app.router.add_get("/", root_handler)
+        app.router.add_get("/health", health_handler)
+        app.router.add_get("/api/health", health_handler)
+        app.router.add_get("/stats", stats_handler)
+        app.router.add_get("/api/stats", stats_handler)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", API_PORT)
+        await site.start()
+        print(f"Web API サーバーがポート {API_PORT} で起動しました。")
 
 bot = AuthBot()
 
