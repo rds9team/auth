@@ -442,7 +442,9 @@ async def rotate_status():
 
     total_members = sum(g.member_count or 0 for g in bot.guilds)
     total_guilds = len(bot.guilds)
-    ping = max(0, round(bot.latency * 1000))
+    ping = 0
+    if math.isfinite(bot.latency):
+        ping = max(0, round(bot.latency * 1000))
 
     statuses = [
         f"{total_members}人 | {total_guilds}鯖",
@@ -782,7 +784,18 @@ class SetupView(discord.ui.View):
         )
         panel_view.add_item(button)
 
-        await channel.send(embed=panel_embed, view=panel_view)
+        try:
+            await channel.send(embed=panel_embed, view=panel_view)
+        except discord.errors.Forbidden:
+            return await interaction.response.send_message(
+                f"❌ {channel.mention} へのメッセージ送信権限（メッセージを送信・埋め込みリンク）が不足しています。チャンネルの権限設定を確認してください。",
+                ephemeral=True
+            )
+        except Exception as e:
+            return await interaction.response.send_message(
+                f"❌ パネル設置中にエラーが発生しました: {e}",
+                ephemeral=True
+            )
 
         done_embed = discord.Embed(
             title="🎉 設置完了",
