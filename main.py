@@ -187,8 +187,8 @@ async def send_auth_fail_log(guild: discord.Guild, user: discord.User | discord.
 async def send_welcome_dm(member: discord.Member):
     try:
         embed = discord.Embed(
-            title=f"🎉 {member.guild.name} へようこそ！",
-            description="認証が完了し、チャンネルが利用可能になりました！\nサーバーのルールをご確認の上、お楽しみください。",
+            title=f"{member.guild.name} へようこそ",
+            description="認証が完了し、チャンネルが利用可能になりました。\nサーバーのルールをご確認の上、ご利用ください。",
             color=discord.Color.green(),
             timestamp=datetime.now()
         )
@@ -230,7 +230,7 @@ async def handle_role_assignment(interaction: discord.Interaction, target_role_i
     if b_role:
         await send_blacklist_log(guild, member, b_role)
         return await interaction.response.send_message(
-            f"❌ あなたには認証が制限されたロール（**{b_role.name}**）が付与されているため、認証を行うことができません。\n心当たりがない場合はサーバー管理者にお問い合わせください。",
+            f"認証が制限されたロール（**{b_role.name}**）が付与されているため、認証を行うことができません。\n心当たりがない場合はサーバー管理者にお問い合わせください。",
             ephemeral=True
         )
 
@@ -248,7 +248,7 @@ async def handle_role_assignment(interaction: discord.Interaction, target_role_i
         return await interaction.response.send_message("エラー: 付与するロールが見つかりません。管理者に連絡してください。", ephemeral=True)
 
     if role in member.roles:
-        return await interaction.response.send_message("すでに認証されています！", ephemeral=True)
+        return await interaction.response.send_message("すでに認証されています。", ephemeral=True)
 
     try:
         await member.add_roles(role)
@@ -268,7 +268,7 @@ async def handle_role_assignment(interaction: discord.Interaction, target_role_i
                 except Exception as err:
                     print(f"ロール剥奪エラー: {err}")
 
-        await interaction.response.send_message("認証が完了しました！ロールを付与しました🎉", ephemeral=True)
+        await interaction.response.send_message("認証が完了しました。ロールを付与しました。", ephemeral=True)
 
         await send_auth_log(guild, member, role, removed_role)
         await send_welcome_dm(member)
@@ -300,7 +300,7 @@ class CaptchaModal(discord.ui.Modal, title="サーバー認証 (CAPTCHA)"):
         if self.captcha_input.value.strip().upper() != self.expected_captcha.upper():
             if interaction.guild:
                 await send_auth_fail_log(interaction.guild, interaction.user, f"CAPTCHA不一致 (入力: {self.captcha_input.value.strip()})")
-            return await interaction.response.send_message("❌ 認証コードが一致しません。もう一度やり直してください。", ephemeral=True)
+            return await interaction.response.send_message("認証コードが一致しません。もう一度やり直してください。", ephemeral=True)
         await handle_role_assignment(interaction, self.target_role_id, self.remove_role_id, self.blacklist_role_id)
 
 class MathModal(discord.ui.Modal, title="サーバー認証 (計算問題)"):
@@ -325,7 +325,7 @@ class MathModal(discord.ui.Modal, title="サーバー認証 (計算問題)"):
         if not val.isdigit() or int(val) != self.answer:
             if interaction.guild:
                 await send_auth_fail_log(interaction.guild, interaction.user, f"計算間違い (入力: {val})")
-            return await interaction.response.send_message("❌ 計算の答えが一致しません。もう一度お試しください。", ephemeral=True)
+            return await interaction.response.send_message("計算の答えが一致しません。もう一度お試しください。", ephemeral=True)
         await handle_role_assignment(interaction, self.target_role_id, self.remove_role_id, self.blacklist_role_id)
 
 class PassphraseModal(discord.ui.Modal, title="サーバー認証 (合言葉)"):
@@ -347,7 +347,7 @@ class PassphraseModal(discord.ui.Modal, title="サーバー認証 (合言葉)"):
         if self.pass_input.value.strip() != self.expected_passphrase.strip():
             if interaction.guild:
                 await send_auth_fail_log(interaction.guild, interaction.user, "合言葉不一致")
-            return await interaction.response.send_message("❌ 合言葉が間違っています。もう一度お試しください。", ephemeral=True)
+            return await interaction.response.send_message("合言葉が間違っています。もう一度お試しください。", ephemeral=True)
         await handle_role_assignment(interaction, self.target_role_id, self.remove_role_id, self.blacklist_role_id)
 
 class TermsModal(discord.ui.Modal, title="サーバー認証 (利用規約同意)"):
@@ -369,7 +369,7 @@ class TermsModal(discord.ui.Modal, title="サーバー認証 (利用規約同意
         if val not in ("同意する", "同意") and val.lower() != "agree":
             if interaction.guild:
                 await send_auth_fail_log(interaction.guild, interaction.user, f"規約同意文字列不一致 (入力: {val})")
-            return await interaction.response.send_message("❌ 「同意する」と正確に入力してください。", ephemeral=True)
+            return await interaction.response.send_message("「同意する」と正確に入力してください。", ephemeral=True)
         await handle_role_assignment(interaction, self.target_role_id, self.remove_role_id, self.blacklist_role_id)
 
 # Botクラス
@@ -476,7 +476,7 @@ async def on_button_click(interaction: discord.Interaction):
     # 連打防止
     rem = check_cooldown(interaction.user.id)
     if rem is not None:
-        return await interaction.response.send_message(f"⚠️ 操作が早すぎます。あと **{rem}秒** 待ってから再度お試しください。", ephemeral=True)
+        return await interaction.response.send_message(f"操作が早すぎます。あと **{rem}秒** 待ってから再度お試しください。", ephemeral=True)
 
     # 旧バージョン互換
     if custom_id == "auth_button":
@@ -495,7 +495,7 @@ async def on_button_click(interaction: discord.Interaction):
             if b_role:
                 await send_blacklist_log(interaction.guild, interaction.user, b_role)
                 return await interaction.response.send_message(
-                    f"❌ あなたには認証が制限されたロール（**{b_role.name}**）が付与されているため、認証を行うことができません。\n心当たりがない場合はサーバー管理者にお問い合わせください。",
+                    f"認証が制限されたロール（**{b_role.name}**）が付与されているため、認証を行うことができません。\n心当たりがない場合はサーバー管理者にお問い合わせください。",
                     ephemeral=True
                 )
 
@@ -680,11 +680,11 @@ class SetupView(discord.ui.View):
             "terms": "利用規約同意"
         }
         embed = discord.Embed(
-            title="⚙️ 認証パネル セットアップ",
+            title="認証パネル セットアップ",
             description="セレクトメニューから設定を選び、「認証パネルを設置」を押してください。\n※あなただけに表示されている設定画面です。",
             color=self.parse_embed_color()
         )
-        role_val = self.target_role.mention if self.target_role else "⚠️ 未選択 (必須)"
+        role_val = self.target_role.mention if self.target_role else "未選択 (必須)"
         log_val = self.log_channel.mention if self.log_channel else "未設定 (ログ送信なし)"
         remove_val = self.remove_role.mention if self.remove_role else "なし"
         black_val = self.blacklist_role.mention if self.blacklist_role else "なし"
@@ -747,10 +747,10 @@ class SetupView(discord.ui.View):
             return await interaction.response.send_message("サーバー内のチャンネルで実行してください。", ephemeral=True)
 
         if not self.target_role:
-            return await interaction.response.send_message("❌ 付与するロールを選択してください。", ephemeral=True)
+            return await interaction.response.send_message("付与するロールを選択してください。", ephemeral=True)
 
         if self.auth_type == "passphrase" and not self.extra_text:
-            return await interaction.response.send_message("❌ 合言葉認証には正解キーワードの設定が必要です。「詳細設定」から入力してください。", ephemeral=True)
+            return await interaction.response.send_message("合言葉認証には正解キーワードの設定が必要です。「詳細設定」から入力してください。", ephemeral=True)
 
         # ログチャンネル設定があればDBに永続化
         if self.log_channel:
@@ -789,18 +789,18 @@ class SetupView(discord.ui.View):
             await channel.send(embed=panel_embed, view=panel_view)
         except discord.errors.Forbidden:
             return await interaction.response.send_message(
-                f"❌ {channel.mention} へのメッセージ送信権限（メッセージを送信・埋め込みリンク）が不足しています。チャンネルの権限設定を確認してください。",
+                f"{channel.mention} へのメッセージ送信権限（メッセージを送信・埋め込みリンク）が不足しています。チャンネルの権限設定を確認してください。",
                 ephemeral=True
             )
         except Exception as e:
             return await interaction.response.send_message(
-                f"❌ パネル設置中にエラーが発生しました: {e}",
+                f"パネル設置中にエラーが発生しました: {e}",
                 ephemeral=True
             )
 
         done_embed = discord.Embed(
-            title="🎉 設置完了",
-            description=f"認証パネルを {channel.mention} に設置しました！",
+            title="設置完了",
+            description=f"認証パネルを {channel.mention} に設置しました。",
             color=discord.Color.green()
         )
         await interaction.response.edit_message(embed=done_embed, view=None)
